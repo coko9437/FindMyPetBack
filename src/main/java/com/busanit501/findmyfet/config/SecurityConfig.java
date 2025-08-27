@@ -59,7 +59,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authorize -> authorize
 
                         // ======================  아래 부분을 추가해주세요. ======================
-                        .requestMatchers("/api/posts/**").permitAll() // /api/posts 로 시작하는 모든 요청은 인증 없이 허용
+//                        .requestMatchers("/api/posts/**").permitAll() // /api/posts 로 시작하는 모든 요청은 인증 없이 허용
 //                        .requestMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .anyRequest().authenticated() // 나머지 모든 요청은 인증 필요
                 )

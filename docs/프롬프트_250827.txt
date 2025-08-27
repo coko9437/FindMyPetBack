@@ -7,22 +7,35 @@ React를 이용한 프론트엔드, SpringBoot를 이용한 백엔드를 이용�
 3. 추가적으로 아쉽다고 느끼는점을 듣고싶은데, 여기서 얘기하는건 다른접근방식(예시 : JPAQueryFactory vs. QuerydslRepositorySupport) 같은건 빼고 얘기해줬으면 좋겠어.
 
 
-25년08월26일까지 작업한 백엔드
+25년08월27일까지 작업한 백엔드
 
--config
-
+- config
+src/main/java/com/busanit501/findmyfet/config/RootConfig.java
 #RootConfig.java
 package com.busanit501.findmyfet.config;
 
+import com.busanit501.findmyfet.domain.User;
+import com.busanit501.findmyfet.domain.post.AnimalGender;
+import com.busanit501.findmyfet.domain.post.Image;
+import com.busanit501.findmyfet.domain.post.Post;
+import com.busanit501.findmyfet.dto.post.MyPostResponseDto;
+import com.busanit501.findmyfet.dto.post.PostDetailResponseDto;
+import com.busanit501.findmyfet.dto.post.PostListResponseDto;
+import com.busanit501.findmyfet.dto.user.AuthorDto;
+import com.querydsl.jpa.impl.JPAQueryFactory;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.modelmapper.Converter;
 import org.modelmapper.ModelMapper;
 import org.modelmapper.convention.MatchingStrategies;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 // 작업 순서2
 @Configuration
-@EnableJpaAuditing
 public class RootConfig {
 
     @Bean
@@ -31,14 +44,136 @@ public class RootConfig {
         modelMapper.getConfiguration()
                 .setFieldMatchingEnabled(true)
                 .setFieldAccessLevel(org.modelmapper.config.Configuration.AccessLevel.PRIVATE)
-                .setMatchingStrategy(MatchingStrategies.LOOSE);
+                .setMatchingStrategy(MatchingStrategies.STRICT); // LOOSE 보다 STRICT 추천
+
+        // User -> AuthorDto 매핑 (공통으로 사용될 수 있으므로 먼저 정의)
+        modelMapper.createTypeMap(User.class, AuthorDto.class);
+
+        // Post -> PostDetailResponseDto 매핑 설정
+        modelMapper.createTypeMap(Post.class, PostDetailResponseDto.class)
+                .addMappings(mapper -> {
+                    mapper.map(Post::getId, PostDetailResponseDto::setPostId);
+
+                    mapper.using((Converter<AnimalGender, String>) context ->
+                            context.getSource() == null ? null : context.getSource().getDescription()
+                    ).map(Post::getGender, PostDetailResponseDto::setGender);
+
+                    mapper.using((Converter<List<Image>, List<String>>) context ->
+                            context.getSource() == null ? null : context.getSource().stream()
+                                    .map(Image::getImageUrl)
+                                    .collect(Collectors.toList())
+                    ).map(Post::getImages, PostDetailResponseDto::setImageUrls);
+
+                    // author 필드는 Post 엔티티의 user 필드를 사용하여 매핑하도록 명시
+                    mapper.map(Post::getUser, PostDetailResponseDto::setAuthor);
+                });
+
+        // Post -> PostListResponseDto 매핑 설정
+        modelMapper.createTypeMap(Post.class, PostListResponseDto.class)
+                .addMappings(mapper -> {
+                    mapper.map(Post::getId, PostListResponseDto::setPostId);
+
+                    mapper.using((Converter<List<Image>, String>) context ->
+                            (context.getSource() == null || context.getSource().isEmpty()) ?
+                                    null : context.getSource().get(0).getImageUrl()
+                    ).map(Post::getImages, PostListResponseDto::setThumbnailUrl);
+
+                    // author 필드는 Post 엔티티의 user 필드를 사용하여 매핑하도록 명시
+                    mapper.map(Post::getUser, PostListResponseDto::setAuthor);
+                });
+
+        // Post -> MyPostResponseDto 매핑 설정
+        modelMapper.createTypeMap(Post.class, MyPostResponseDto.class)
+                .addMappings(mapper -> {
+                    mapper.map(Post::getId, MyPostResponseDto::setPostId);
+                });
 
         return modelMapper;
     }
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    @Bean
+    public JPAQueryFactory jpaQueryFactory() {
+        return new JPAQueryFactory(entityManager);
+    }
 }
+//====================================
+src/main/java/com/busanit501/findmyfet/config/SecurityConfig.java
+#SecurityConfig.java
+package com.busanit501.findmyfet.config;
 
-///===================================================
+import com.busanit501.findmyfet.security.JwtAuthenticationFilter;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.cors.CorsConfigurationSource;
+import java.util.Arrays;
 
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public WebSecurityCustomizer webSecurityCustomizer() {
+        // 보안 필터 체인을 완전히 무시할 경로 설정
+        return (web) -> web.ignoring()
+                .requestMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**");
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(Arrays.asList("http://localhost:5173")); // React 개발 서버 주소
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setAllowCredentials(true); // 자격 증명 허용
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration); // 모든 경로에 대해 CORS 설정 적용
+        return source;
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource())) // CORS 설정 적용
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(authorize -> authorize
+
+                        // ======================  아래 부분을 추가해주세요. ======================
+                        .requestMatchers("/api/posts/**").permitAll() // /api/posts 로 시작하는 모든 요청은 인증 없이 허용
+//                        .requestMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        .anyRequest().authenticated() // 나머지 모든 요청은 인증 필요
+                )
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+}
+//====================================
+src/main/java/com/busanit501/findmyfet/config/SwaggerConfig.java
 #SwaggerConfig.java
 package com.busanit501.findmyfet.config;
 
@@ -75,43 +210,139 @@ public class SwaggerConfig {
     }
 
 }
+//=========================================
+src/main/java/com/busanit501/findmyfet/config/WebConfig.java
+#WebConfig.java
+package com.busanit501.findmyfet.config;
 
-///===================================================
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
--entity
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
 
-#BaseEntity.java
-package com.busanit501.findmyfet.domain;
+    // application.properties에 설정한 파일 업로드 경로를 주입받습니다.
+    @Value("${upload.path}")
+    private String uploadPath;
 
-
-import jakarta.persistence.Column;
-import jakarta.persistence.EntityListeners;
-import jakarta.persistence.MappedSuperclass;
-import lombok.Getter;
-import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.LastModifiedDate;
-import org.springframework.data.jpa.domain.support.AuditingEntityListener;
-
-import java.time.LocalDateTime;
-
-@MappedSuperclass
-@EntityListeners(value = {AuditingEntityListener.class})
-@Getter
-public abstract class BaseEntity {
-
-    @CreatedDate // postRepository.save()가 호출되어 새로운 데이터가 DB에 처음 저장되는 시점에 Spring Data JPA가 현재 시간을 자동으로
-    @Column(name = "reg_date", updatable = false)
-    private LocalDateTime createdAt; //변수명 변경_240824
-
-    @LastModifiedDate
-    @Column(name = "mod_date")
-    private LocalDateTime updatedAt; //변수명 변경_240824
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        // '/upload/**' URL 패턴으로 요청이 오면
+        registry.addResourceHandler("/upload/**")
+                // 로컬 디스크의 'file:///C:/Users/사용자명/upload/' 경로와 매핑합니다.
+                .addResourceLocations("file:///" + uploadPath + "/");
+    }
 }
+//=========================================
+-controller
+src/main/java/com/busanit501/findmyfet/controller/post/PostController.java
+#PostController.java
+package com.busanit501.findmyfet.controller.post;
+
+import com.busanit501.findmyfet.dto.paging.PageRequestDto;
+import com.busanit501.findmyfet.dto.paging.PageResponseDto;
+import com.busanit501.findmyfet.dto.post.*; // DTO 한번에 import
+import com.busanit501.findmyfet.service.post.PostService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+// import org.springframework.security.core.annotation.AuthenticationPrincipal; // Spring Security 설정 후 import
+// import com.busanit501.findmyfet.security.UserDetailsImpl; // UserDetails 구현체 import
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
+
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api/posts")
+public class PostController {
+
+    private final PostService postService;
+
+    // 1 게시글 목록 조회(페이징처리 + 검색기능)
+    @GetMapping
+    public ResponseEntity<PageResponseDto<PostListResponseDto>> getPostList(PageRequestDto pageRequestDTO) {
+        PageResponseDto<PostListResponseDto> response = postService.findAllPosts(pageRequestDTO);
+        return ResponseEntity.ok(response);
+    }
 
 
-///===================================================
+    // 2 게시글 상세 조회
+    @GetMapping("/{postId}")
+    public ResponseEntity<PostDetailResponseDto> getPost(@PathVariable Long postId) {
+        PostDetailResponseDto responseDto = postService.findPostById(postId);
+        return ResponseEntity.ok(responseDto);
+    }
 
+    // 3 게시글 작성
+    @PostMapping(consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
+    public ResponseEntity<String> createPost(
+            @Valid @RequestPart("requestDto") PostCreateRequestDto requestDto,
+            @RequestPart(value = "images", required = false) List<MultipartFile> images) {
+        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
+        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
+        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
 
+        Long postId = postService.createPost(requestDto, images, tempUserId);
+        return ResponseEntity.status(HttpStatus.CREATED).body("게시글이 성공적으로 등록되었습니다. ID: " + postId);
+    }
+
+    // 4 게시글 수정
+    @PutMapping(value = "/{postId}", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
+    public ResponseEntity<String> updatePost(
+            @PathVariable Long postId,
+            @RequestPart("requestDto") PostUpdateRequestDto requestDto,
+            @RequestPart(value = "newImages", required = false) List<MultipartFile> newImages) {
+        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
+        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
+        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
+
+        postService.updatePost(postId, requestDto, newImages, tempUserId);
+        return ResponseEntity.ok("게시글이 성공적으로 수정되었습니다. ID: " + postId);
+    }
+
+    // 5 게시글 삭제
+    @DeleteMapping("/{postId}")
+    public ResponseEntity<String> deletePost(@PathVariable Long postId) {
+        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
+        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
+        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
+
+        postService.deletePost(postId, tempUserId);
+        return ResponseEntity.ok("게시글이 성공적으로 삭제되었습니다. ID: " + postId);
+    }
+
+    // 6 찾기 완료 처리
+    @PutMapping("/{postId}/complete")
+    public ResponseEntity<String> completePost(@PathVariable Long postId) {
+        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
+        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
+        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
+
+        postService.completePost(postId, tempUserId);
+        return ResponseEntity.ok("찾기 완료 처리되었습니다. ID: " + postId);
+    }
+
+    // 7 내가 작성한 게시글 목록
+    @GetMapping("/my")
+    public ResponseEntity<List<MyPostResponseDto>> getMyPosts() {
+        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
+        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
+        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
+
+        List<MyPostResponseDto> myPosts = postService.findMyPosts(tempUserId);
+        return ResponseEntity.ok(myPosts);
+    }
+}
+//====================================
+-post(entity)
+
+src/main/java/com/busanit501/findmyfet/domain/post/Post.java
 #Post.java
 package com.busanit501.findmyfet.domain.post;
 
@@ -150,6 +381,11 @@ public class Post extends BaseEntity {
     private String animalCategory; // 예시: "개", "고양이" 등
     private String animalBreed; // 품종
 
+//    private String gender;
+
+    @Enumerated(EnumType.STRING) // DB에는 "MALE", "FEMALE" 등의 문자열로 저장
+    private AnimalGender gender; // <<<<<<<<<<<< 성별 필드 추가
+
     private LocalDateTime lostTime; // 실종 시간
 
     private double latitude;  // 위도
@@ -161,9 +397,10 @@ public class Post extends BaseEntity {
     @Column(nullable = false)
     private PostType postType;
 
+    @Builder.Default // <<<<<<<<<<<<<<< 이 어노테이션이 매우 중요합니다.
     @Enumerated(EnumType.STRING) // "ACTIVE", "COMPLETED"
     @Column(nullable = false)
-    private Status status;
+    private Status status = Status.ACTIVE; // <<<<<<< '= Status.ACTIVE' 로 기본값을 설정합니다.
 
 //    private LocalDateTime createdAt;
 
@@ -189,14 +426,14 @@ public class Post extends BaseEntity {
         image.setPost(this);
     }
 
+
     // 비즈니스 로직 : 업데이트 (모든 필드를 받도록)
-//    public void update(String title, String content, String animalName, int animalAge, String animalCategory,
-//                       String animalBreed, LocalDateTime lostTime, double latitude, double longitude, String location, PostType postType) {
     public void update(PostUpdateRequestDto dto) {
         this.title = dto.getTitle();
         this.content = dto.getContent();
         this.animalName = dto.getAnimalName();
         this.animalAge = dto.getAnimalAge();
+        this.gender = dto.getGender();
         this.animalCategory = dto.getAnimalCategory();
         this.animalBreed = dto.getAnimalBreed();
         this.lostTime = dto.getLostTime();
@@ -214,26 +451,9 @@ public class Post extends BaseEntity {
 }
 
 
-///===================================================
 
-#PostType.java
-package com.busanit501.findmyfet.domain.post;
-
-public enum PostType {
-    MISSING, SHELTER
-}
-
-///===================================================
-
-#Status.java
-package com.busanit501.findmyfet.domain.post;
-
-public enum Status {
-    ACTIVE, COMPLETED
-}
-
-///===================================================
-
+//====================================
+src/main/java/com/busanit501/findmyfet/domain/post/Image.java
 #Image.java
 package com.busanit501.findmyfet.domain.post;
 
@@ -283,142 +503,103 @@ public class Image {
 }
 
 
-///===================================================
+//===============================================
+src/main/java/com/busanit501/findmyfet/domain/post/PostType.java
+#PostType.java
+package com.busanit501.findmyfet.domain.post;
 
--repository
-
-#PostRepository.java
-package com.busanit501.findmyfet.repository.post;
-
-
-import com.busanit501.findmyfet.domain.post.Post;
-import org.springframework.data.jpa.repository.JpaRepository;
-
-import java.util.List;
-
-public interface PostRepository extends JpaRepository<Post, Long>, PostRepositoryCustom  {
-
-    // User 엔티티의 userid 필드를 기준으로 찾도록 수정
-    List<Post> findByUser_UseridOrderByCreatedAtDesc(Long userid);
+public enum PostType {
+    MISSING, SHELTER
 }
 
 
+//===============================================
+src/main/java/com/busanit501/findmyfet/domain/post/Status.java
+#Status.java
+package com.busanit501.findmyfet.domain.post;
 
-///
+public enum Status {
+    ACTIVE, COMPLETED
+}
 
-#ImageRepository.java
-package com.busanit501.findmyfet.repository.post;
+//===============================================
+src/main/java/com/busanit501/findmyfet/domain/post/AnimalGender.java
+#AnimalGender.java
+package com.busanit501.findmyfet.domain.post;
 
-import com.busanit501.findmyfet.domain.post.Image;
-import org.springframework.data.jpa.repository.JpaRepository;
+import lombok.Getter;
 
-public interface ImageRepository extends JpaRepository<Image, Long> {
+@Getter
+public enum AnimalGender {
+
+    MALE("수컷"),
+    FEMALE("암컷"),
+    UNKNOWN("모름");
+
+    private final String description;
+
+    AnimalGender(String description) {
+        this.description = description;
+    }
 
 }
 
+//===============================================
+-error (dto)
+src/main/java/com/busanit501/findmyfet/dto/error/ErrorDetail.java
+#ErrorDetail.java
+package com.busanit501.findmyfet.dto.error;
 
-///===================================================
+import lombok.AllArgsConstructor;
+import lombok.Getter;
 
-#PostRepositoryCustom.java
-package com.busanit501.findmyfet.repository.post;
-
-import com.busanit501.findmyfet.domain.post.Post;
-import com.busanit501.findmyfet.dto.paging.PageRequestDto;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-
-public interface PostRepositoryCustom {
-
-    // 페이징처리 동적 검색 쿼리를 처리할 메소드
-    Page<Post> search(PageRequestDto pageRequestDTO, Pageable pageable);
-
+@Getter
+@AllArgsConstructor
+public class ErrorDetail {
+    private String field;
+    private String message;
 }
 
+//====================================
+src/main/java/com/busanit501/findmyfet/dto/error/ErrorResponse.java
+#ErrorResponse.java
+package com.busanit501.findmyfet.dto.error;
 
-///===================================================
+import lombok.Getter;
 
-#PostRepositoryCustomImpl.java
-package com.busanit501.findmyfet.repository.post;
+// 역할: 기획서에 명시된 {"success": false, "error": {"code": "...", "message": "..."}} 와 유사한 구조를 만들기 위한 데이터
+@Getter
+public class ErrorResponse {
+    private final String code;
+    private final String message;
 
-import com.busanit501.findmyfet.domain.post.Post;
-
-import com.busanit501.findmyfet.domain.post.QPost;
-import com.busanit501.findmyfet.dto.paging.PageRequestDto;
-import com.querydsl.core.BooleanBuilder;
-import com.querydsl.jpa.impl.JPAQuery;
-import com.querydsl.jpa.impl.JPAQueryFactory;
-import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
-import org.springframework.util.StringUtils;
-
-import java.util.List;
-
-@RequiredArgsConstructor
-public class PostRepositoryCustomImpl implements PostRepositoryCustom{
-
-    private final JPAQueryFactory queryFactory;
-
-
-    @Override
-    public Page<Post> search(PageRequestDto pageRequestDTO, Pageable pageable) {
-        QPost post = QPost.post;
-        BooleanBuilder booleanBuilder = new BooleanBuilder();
-
-        // 검색 조건 추가
-        if (StringUtils.hasText(pageRequestDTO.getType())) {
-            booleanBuilder.and(post.postType.stringValue().eq(pageRequestDTO.getType()));
-        }
-        if (StringUtils.hasText(pageRequestDTO.getCategory())) {
-            booleanBuilder.and(post.animalCategory.eq(pageRequestDTO.getCategory()));
-        }
-
-        // ===================  핵심 변경 사항  ===================
-        // 기존 : booleanBuilder.and(post.user.address.contains(pageRequestDTO.getRegion()));
-        // 변경 : Post 엔티티의 location 필드와 정확히 일치하는 것을 검색합니다.
-        if (StringUtils.hasText(pageRequestDTO.getRegion())) {
-            booleanBuilder.and(post.location.eq(pageRequestDTO.getRegion()));
-        }
-        // ==============================================================
-
-        if (StringUtils.hasText(pageRequestDTO.getKeyword())) {
-            booleanBuilder.and(post.title.contains(pageRequestDTO.getKeyword())
-                    .or(post.content.contains(pageRequestDTO.getKeyword())));
-        }
-
-        // 쿼리 생성
-        // N+1 문제 방지를 위해 fetchJoin() 추가
-        JPAQuery<Post> query = queryFactory.selectFrom(post)
-                .leftJoin(post.user).fetchJoin() // 작성자 정보를 함께 조회
-                .where(booleanBuilder)
-                .offset(pageable.getOffset())
-                .limit(pageable.getPageSize())
-                .orderBy(post.createdAt.desc());
-
-        List<Post> content = query.fetch();
-
-        // 전체 카운트 쿼리
-        JPAQuery<Long> countQuery = queryFactory.select(post.count())
-                .from(post)
-                .where(booleanBuilder);
-
-        long total = countQuery.fetchOne();
-
-        return new PageImpl<>(content, pageable, total);
+    public ErrorResponse(String code, String message) {
+        this.code = code;
+        this.message = message;
     }
 }
-//post.user.address.contains(...)를 post.location.eq(...)로 변경하여,
-// 사용자가 게시글을 작성할 때 직접 입력한 location 값("서울시", "부산시" 등)과 검색어가
-// 정확히 일치하는 게시글만 찾도록 수정했습니다.
-// 추가로, 게시글 목록 조회 시 각 게시글마다 작성자 정보를 가져오기 위해
-// 발생하는 N+1 쿼리 문제를 예방하고자 .leftJoin(post.user).fetchJoin() 코드를
-// 추가하여 성능을 최적화했습니다.
 
-///===================================================
+//====================================
+src/main/java/com/busanit501/findmyfet/dto/error/ErrorResponseWithDetails.java
+#ErrorResponseWithDetails.java
+package com.busanit501.findmyfet.dto.error;
 
--paging
+import lombok.Getter;
+import java.util.List;
 
+// 역할: 기존 ErrorResponse를 상속받아, 상세 에러 목록(details)을 추가로 가짐
+@Getter
+public class ErrorResponseWithDetails extends ErrorResponse {
+    private final List<ErrorDetail> details;
+
+    public ErrorResponseWithDetails(String code, String message, List<ErrorDetail> details) {
+        super(code, message);
+        this.details = details;
+    }
+}
+//====================================
+-paging (dto)
+src/main/java/com/busanit501/findmyfet/dto/paging/PageRequestDto.java
 #PageRequestDto.java
 package com.busanit501.findmyfet.dto.paging;
 
@@ -458,15 +639,15 @@ public class PageRequestDto {
     private String region;   // 지역
     private String keyword;  // 검색 키워드 (제목, 내용 등)
 
+    private String gender; // <<<<<<<<<<<< 검색 조건 추가
+
     // Spring Data JPA의 Pageable 객체를 생성하는 헬퍼 메소드
     public Pageable getPageable(String... props) {
         return PageRequest.of(this.page - 1, this.size, Sort.by(props).descending());
     }
 }
-
-
-///===================================================
-
+//===============================================
+src/main/java/com/busanit501/findmyfet/dto/paging/PageResponseDto.java
 #PageResponseDto.java
 package com.busanit501.findmyfet.dto.paging;
 
@@ -513,11 +694,577 @@ public class PageResponseDto<E> {
         this.next = total > this.end * this.size;
     }
 }
+//====================================
+
+-dto
+src/main/java/com/busanit501/findmyfet/dto/post/MyPostResponseDto.java
+#MyPostResponseDto.java
+package com.busanit501.findmyfet.dto.post;
+
+import com.busanit501.findmyfet.domain.post.Post;
+import com.busanit501.findmyfet.domain.post.PostType;
+import com.busanit501.findmyfet.domain.post.Status;
+import lombok.*;
+
+import java.time.LocalDateTime;
+
+@Getter
+@Setter
+@NoArgsConstructor
+public class MyPostResponseDto {
+    private Long postId;
+    private String title;
+    private PostType postType;
+    private Status status;
+    private LocalDateTime createdAt;
+    // private int commentCount; // TODO: Comment 기능 연동 후 주석 해제
+
+    public MyPostResponseDto(Post entity) {
+        this.postId = entity.getId();
+        this.title = entity.getTitle();
+        this.postType = entity.getPostType();
+        this.status = entity.getStatus();
+        this.createdAt = entity.getCreatedAt();
+        // this.commentCount = entity.getComments().size();
+    }
+
+}
 
 
-///===================================================
+//====================================
+src/main/java/com/busanit501/findmyfet/dto/post/PostCreateRequestDto.java
+#PostCreateRequestDto.java
+package com.busanit501.findmyfet.dto.post;
 
--service(Impl)
+import com.busanit501.findmyfet.domain.post.AnimalGender;
+import com.busanit501.findmyfet.domain.post.Post;
+import com.busanit501.findmyfet.domain.post.PostType;
+import com.busanit501.findmyfet.domain.post.Status;
+import jakarta.validation.constraints.NotBlank;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+// 게시글 작성 DTO
+@Getter
+@Setter
+@AllArgsConstructor
+public class PostCreateRequestDto {
+
+    @NotBlank(message = "제목은 필수 입력 항목입니다.")
+    private String title;
+
+    @NotBlank(message = "내용은 필수 입력 항목입니다.")
+    private String content;
+
+    private String animalName;
+    private int animalAge;
+    private String animalCategory;
+    private String animalBreed;
+    private LocalDateTime lostTime;
+
+    private AnimalGender gender; // <<<<<<<<<<<< 추가 (Enum 타입 사용)
+
+    private double latitude;
+    private double longitude;
+
+    private String location; // 잃어버린장소 추가 250825
+    private PostType postType;
+
+
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/dto/post/PostDetailResponseDto.java
+#PostDetailResponseDto.java
+package com.busanit501.findmyfet.dto.post;
+
+import com.busanit501.findmyfet.domain.post.Post;
+import com.busanit501.findmyfet.domain.post.PostType;
+import com.busanit501.findmyfet.domain.post.Status;
+import com.busanit501.findmyfet.dto.user.AuthorDto;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.stream.Collectors;
+
+// 상세 조회 DTO
+@Getter
+@Setter
+@NoArgsConstructor
+public class PostDetailResponseDto {
+
+    private Long postId;
+    private String title;
+    private String content;
+    private String animalName;
+    private int animalAge;
+    private String animalCategory;
+    private String animalBreed;
+    private LocalDateTime lostTime;
+
+    private double latitude;
+    private double longitude;
+
+    private String gender; // <<<<<<<<<<<< 추가 (프론트에 전달할 때는 문자열로)
+
+    private String location; // 잃어버린장소 추가 250825
+
+    private PostType postType; // Post 엔티티와 타입을 맞춤
+    private Status status;     // Post 엔티티와 타입을 맞춤
+
+    private LocalDateTime createdAt;
+    private AuthorDto author; // TODO: User 기능 연동 후 추가
+    private List<String> imageUrls; // 이미지 URL 목록
+
+}
+
+
+//====================================
+src/main/java/com/busanit501/findmyfet/dto/post/PostListResponseDto.java
+#PostListResponseDto.java
+package com.busanit501.findmyfet.dto.post;
+
+import com.busanit501.findmyfet.domain.post.Post;
+import com.busanit501.findmyfet.domain.post.PostType;
+import com.busanit501.findmyfet.domain.post.Status;
+import com.busanit501.findmyfet.dto.user.AuthorDto;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Getter
+@Setter
+@NoArgsConstructor
+public class PostListResponseDto {
+    private Long postId;
+    private String title;
+    private String animalName;
+    private String thumbnailUrl; // 디폴트값 null;
+    private PostType postType; // Post 엔티티와 타입을 맞춤
+    private Status status;     // Post 엔티티와 타입을 맞춤
+
+    private AuthorDto author; // AuthorDto 필드 추가
+
+
+}
+//====================================
+src/main/java/com/busanit501/findmyfet/dto/post/PostUpdateRequestDto.java
+#PostUpdateRequestDto.java
+package com.busanit501.findmyfet.dto.post;
+
+import com.busanit501.findmyfet.domain.post.AnimalGender;
+import com.busanit501.findmyfet.domain.post.PostType;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Getter
+@Setter
+@AllArgsConstructor
+public class PostUpdateRequestDto {
+    private String title;
+    private String content;
+    private String animalName;
+    private int animalAge;
+    private String animalCategory;
+    private String animalBreed;
+    private LocalDateTime lostTime;
+
+    private double latitude;
+    private double longitude;
+
+    private AnimalGender gender; // <<<<<<<<<<<< 추가 (Enum 타입 사용)
+
+    private String location; // <<<<<<<<<<<< 추가 250825
+
+    private PostType postType;
+
+    // 추가: 수정 시 삭제할 기존 이미지의 ID 목록
+    private List<Long> deletedImageIds;
+        // 기존 이미지 중 x 버튼을 눌러 삭제한 이미지"들의 ID를 보내주는 방식으로 구현
+}
+
+//====================================
+-repository
+
+src/main/java/com/busanit501/findmyfet/repository/post/ImageRepository.java
+#ImageRepository.java
+package com.busanit501.findmyfet.repository.post;
+
+import com.busanit501.findmyfet.domain.post.Image;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ImageRepository extends JpaRepository<Image, Long> {
+
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/repository/post/PostRepository.java
+#PostRepository.java
+package com.busanit501.findmyfet.repository.post;
+
+
+import com.busanit501.findmyfet.domain.post.Post;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface PostRepository extends JpaRepository<Post, Long>, PostRepositoryCustom  {
+
+    // User 엔티티의 userid 필드를 기준으로 찾도록 수정
+    List<Post> findByUser_UserIdOrderByCreatedAtDesc(Long userId);
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/repository/post/PostRepositoryCustom.java
+#PostRepositoryCustom.java
+package com.busanit501.findmyfet.repository.post;
+
+import com.busanit501.findmyfet.domain.post.Post;
+import com.busanit501.findmyfet.dto.paging.PageRequestDto;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
+public interface PostRepositoryCustom {
+
+    // 페이징처리 동적 검색 쿼리를 처리할 메소드
+    Page<Post> search(PageRequestDto pageRequestDTO, Pageable pageable);
+
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/repository/post/PostRepositoryCustomImpl.java
+#PostRepositoryCustomImpl.java
+package com.busanit501.findmyfet.repository.post;
+
+import com.busanit501.findmyfet.domain.post.Post;
+
+import com.busanit501.findmyfet.domain.post.QPost;
+import com.busanit501.findmyfet.dto.paging.PageRequestDto;
+import com.querydsl.core.BooleanBuilder;
+import com.querydsl.jpa.impl.JPAQuery;
+import com.querydsl.jpa.impl.JPAQueryFactory;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.util.StringUtils;
+
+import java.util.List;
+
+@RequiredArgsConstructor
+public class PostRepositoryCustomImpl implements PostRepositoryCustom{
+
+    private final JPAQueryFactory queryFactory;
+
+
+    @Override
+    public Page<Post> search(PageRequestDto pageRequestDTO, Pageable pageable) {
+        QPost post = QPost.post;
+        BooleanBuilder booleanBuilder = new BooleanBuilder();
+
+        // 검색 조건 추가
+        if (StringUtils.hasText(pageRequestDTO.getType())) {
+            booleanBuilder.and(post.postType.stringValue().eq(pageRequestDTO.getType()));
+        }
+        if (StringUtils.hasText(pageRequestDTO.getCategory())) {
+            booleanBuilder.and(post.animalCategory.eq(pageRequestDTO.getCategory()));
+        }
+
+        // =================== 성별 검색 조건 추가 ===================
+        if (StringUtils.hasText(pageRequestDTO.getGender())) {
+            booleanBuilder.and(post.gender.stringValue().equalsIgnoreCase(pageRequestDTO.getGender()));
+        }
+
+        // ===================  핵심 변경 사항  ===================
+        // 기존 : booleanBuilder.and(post.user.address.contains(pageRequestDTO.getRegion()));
+        // 변경 : Post 엔티티의 location 필드와 정확히 일치하는 것을 검색합니다.
+        if (StringUtils.hasText(pageRequestDTO.getRegion())) {
+            booleanBuilder.and(post.location.eq(pageRequestDTO.getRegion()));
+        }
+        // ==============================================================
+
+        if (StringUtils.hasText(pageRequestDTO.getKeyword())) {
+            booleanBuilder.and(post.title.contains(pageRequestDTO.getKeyword())
+                    .or(post.content.contains(pageRequestDTO.getKeyword())));
+        }
+
+        // 쿼리 생성
+        // N+1 문제 방지를 위해 fetchJoin() 추가
+        JPAQuery<Post> query = queryFactory.selectFrom(post)
+                .leftJoin(post.user).fetchJoin() // 작성자 정보를 함께 조회
+                .where(booleanBuilder)
+                .offset(pageable.getOffset())
+                .limit(pageable.getPageSize())
+                .orderBy(post.createdAt.desc());
+
+        List<Post> content = query.fetch();
+
+        // 전체 카운트 쿼리
+        JPAQuery<Long> countQuery = queryFactory.select(post.count())
+                .from(post)
+                .where(booleanBuilder);
+
+        long total = countQuery.fetchOne();
+
+        return new PageImpl<>(content, pageable, total);
+    }
+}
+//post.user.address.contains(...)를 post.location.eq(...)로 변경하여,
+// 사용자가 게시글을 작성할 때 직접 입력한 location 값("서울시", "부산시" 등)과 검색어가
+// 정확히 일치하는 게시글만 찾도록 수정했습니다.
+// 추가로, 게시글 목록 조회 시 각 게시글마다 작성자 정보를 가져오기 위해
+// 발생하는 N+1 쿼리 문제를 예방하고자 .leftJoin(post.user).fetchJoin() 코드를
+// 추가하여 성능을 최적화했습니다.
+//====================================
+-search
+src/main/java/com/busanit501/findmyfet/search_post/CategoryDto.java
+#CategoryDto.java
+package com.busanit501.findmyfet.search_post;
+
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+//동물 Category(개, 고양이)와 하위 Breed(품종) 목록을 담는역할
+@Getter
+@NoArgsConstructor
+@AllArgsConstructor
+public class CategoryDto {
+    private String category;
+    private List<String> breeds;
+
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/search_post/SearchController.java
+#SearchController.java
+package com.busanit501.findmyfet.search_post;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api")
+public class SearchController {
+
+    private final SearchService searchService;
+
+
+    @GetMapping("/categories")
+    public ResponseEntity<List<CategoryDto>> getCategoryList() {
+        List<CategoryDto> categories = searchService.getCategoryList();
+        return ResponseEntity.ok(categories);
+    }
+
+
+    @GetMapping("/regions")
+    public ResponseEntity<List<String>> getRegionList() {
+        List<String> regions = searchService.getRegionList();
+        return ResponseEntity.ok(regions);
+    }
+
+    @GetMapping("/genders") // <<<<<<<<<<<< API 추가
+    public ResponseEntity<List<String>> getGenderList() {
+        List<String> genders = searchService.getGenderList();
+        return ResponseEntity.ok(genders);
+    }
+
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/search_post/SearchService.java
+#SearchService.java
+package com.busanit501.findmyfet.search_post;
+
+import java.util.List;
+
+public interface SearchService {
+
+    /**
+     * 프론트엔드 검색 필터에 사용될 동물 카테고리 및 품종 목록을 반환합니다.
+     */
+    List<CategoryDto> getCategoryList();
+
+    /**
+     * 프론트엔드 검색 필터에 사용될 지역 목록을 반환합니다.
+     */
+    List<String> getRegionList();
+
+    /**
+     * 프론트엔드 검색 필터에 사용될 성별 목록을 반환합니다.
+     */
+    List<String> getGenderList(); // <<<<<<<<<<<< 메서드 추가
+
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/search_post/SearchServiceImpl.java
+#SearchServiceImpl.java
+package com.busanit501.findmyfet.search_post;
+
+import com.busanit501.findmyfet.domain.post.AnimalGender;
+import org.springframework.stereotype.Service;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service
+public class SearchServiceImpl implements SearchService {
+
+    @Override
+    public List<CategoryDto> getCategoryList() {
+        // 기획서 기반 하드코딩
+        // 추후 이 데이터를 DB에서 관리하도록 확장할 수 있습니다.
+        CategoryDto dogCategory = new CategoryDto("개", List.of("말티즈", "푸들", "골든리트리버", "진돗개"));
+        CategoryDto catCategory = new CategoryDto("고양이", List.of("코리안숏헤어", "페르시안", "러시안블루", "샴"));
+
+        return List.of(dogCategory, catCategory);
+    }
+
+    @Override
+    public List<String> getRegionList() {
+        // 기획서 기반 하드코딩
+        // Post의 location 필드에 입력될 값들과 일치해야
+        return List.of(
+                "서울시", "부산시", "대구시", "인천시", "광주시",
+                "대전시", "울산시", "경기도", "강원도"
+                // 필요에 따라 다른 지역 추가
+        );
+    }
+
+    @Override
+    public List<String> getGenderList() {
+        // Enum의 모든 값을 가져와서 "MALE", "FEMALE", "UNKNOWN" 문자열 리스트로 반환
+        return Arrays.stream(AnimalGender.values())
+                .map(Enum::name)
+                .collect(Collectors.toList());
+    }
+}
+
+//====================================
+-service
+src/main/java/com/busanit501/findmyfet/service/post/FileUploadService.java
+#FileUploadService.java
+package com.busanit501.findmyfet.service.post;
+
+import org.springframework.web.multipart.MultipartFile;
+
+// 인터페이스로 분리한 이유?
+// 나중에 클라우드 스토리지를 변경하더라도 이 파일의 구현체만 변경하면됨.
+public interface FileUploadService {
+    /**
+     * 파일을 업로드하고 저장된 파일의 URL(또는 경로)을 반환합니다.
+     * @param multipartFile 업로드할 파일
+     * @return 저장된 파일의 접근 URL 또는 경로
+     */
+    String upload(MultipartFile multipartFile);
+
+    /**
+     * 지정된 URL(또는 경로)의 파일을 삭제합니다.
+     * @param fileUrl 삭제할 파일의 URL 또는 경로
+     */
+    void delete(String fileUrl);
+}
+
+//====================================
+src/main/java/com/busanit501/findmyfet/service/post/FileUploadServiceImpl.java
+#FileUploadServiceImpl.java
+package com.busanit501.findmyfet.service.post;
+
+import lombok.extern.log4j.Log4j2;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.UUID;
+
+@Service
+@Log4j2
+public class FileUploadServiceImpl implements FileUploadService {
+
+    // .properties에서 설정한 파일 저장 경로 주입
+    @Value("${file.upload-dir}")
+    private String uploadDir;
+
+    @Override
+    public String upload(MultipartFile multipartFile) {
+        // 파일이 비어있는지 확인
+        if (multipartFile.isEmpty()) {
+            return null;
+        }
+
+        // 원본 파일 이름 가져오기
+        String originalFilename = multipartFile.getOriginalFilename();
+        log.info("Original Filename: " + originalFilename);
+
+        // UUID를 사용하여 고유한 파일 이름 생성 (파일 이름 충돌 방지)
+        String uuid = UUID.randomUUID().toString();
+        String storeFilename = uuid + "_" + originalFilename;
+
+        // 저장할 전체 경로 생성
+        Path savePath = Paths.get(uploadDir + storeFilename);
+        log.info("Save Path: " + savePath);
+
+        try {
+            // 지정된 경로에 파일 저장
+            multipartFile.transferTo(savePath);
+        } catch (IOException e) {
+            log.error("File upload failed.", e);
+            // 예외 처리 (예: 커스텀 예외 발생)
+            throw new RuntimeException("파일 업로드에 실패했습니다.", e);
+        }
+
+        // 저장된 파일의 이름(경로로 사용될 부분)을 반환
+        return storeFilename;
+    } // <<<<<<<<<<<< upload 메서드가 여기서 완전히 끝납니다.
+
+    @Override // <<<<<<<<<<<< delete 메서드는 upload 메서드 밖에서 새로 시작됩니다.
+    public void delete(String filename) {
+        if (filename == null || filename.isEmpty()) {
+            return;
+        }
+        // 전체 파일 경로 생성
+        File file = new File(uploadDir + filename);
+        log.info("Deleting file: " + file.getAbsolutePath());
+
+        // 파일이 존재하면 삭제
+        if (file.exists()) {
+            if (file.delete()) {
+                log.info("File deleted successfully: " + filename);
+            } else {
+                log.warn("Failed to delete file: " + filename);
+            }
+        } else {
+            log.warn("File not found, cannot delete: " + filename);
+        }
+    }
+}
+//====================================
+src/main/java/com/busanit501/findmyfet/service/post/PostService.java
 #PostService.java
 package com.busanit501.findmyfet.service.post;
 
@@ -556,9 +1303,8 @@ public interface PostService {
     List<MyPostResponseDto> findMyPosts(Long userId);
 
 }
-
-///===================================================
-
+//====================================
+src/main/java/com/busanit501/findmyfet/service/post/PostServiceImpl.java
 #PostServiceImpl.java
 package com.busanit501.findmyfet.service.post;
 
@@ -811,620 +1557,10 @@ public class PostServiceImpl implements PostService {
         }
     }
 }
-
-///===================================================
-
-#FileUploadService.java
-package com.busanit501.findmyfet.service.post;
-
-import org.springframework.web.multipart.MultipartFile;
-
-// 인터페이스로 분리한 이유?
-// 나중에 클라우드 스토리지를 변경하더라도 이 파일의 구현체만 변경하면됨.
-public interface FileUploadService {
-    /**
-     * 파일을 업로드하고 저장된 파일의 URL(또는 경로)을 반환합니다.
-     * @param multipartFile 업로드할 파일
-     * @return 저장된 파일의 접근 URL 또는 경로
-     */
-    String upload(MultipartFile multipartFile);
-
-    /**
-     * 지정된 URL(또는 경로)의 파일을 삭제합니다.
-     * @param fileUrl 삭제할 파일의 URL 또는 경로
-     */
-    void delete(String fileUrl);
-}
-
-
-
-///===================================================
-
-#FileUploadServiceImpl.java
-package com.busanit501.findmyfet.service.post;
-
-import lombok.extern.log4j.Log4j2;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
-
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.UUID;
-
-@Service
-@Log4j2
-public class FileUploadServiceImpl implements FileUploadService {
-
-    // .properties에서 설정한 파일 저장 경로 주입
-    @Value("${file.upload-dir}")
-    private String uploadDir;
-
-    @Override
-    public String upload(MultipartFile multipartFile) {
-        // 파일이 비어있는지 확인
-        if (multipartFile.isEmpty()) {
-            return null;
-        }
-
-        // 원본 파일 이름 가져오기
-        String originalFilename = multipartFile.getOriginalFilename();
-        log.info("Original Filename: " + originalFilename);
-
-        // UUID를 사용하여 고유한 파일 이름 생성 (파일 이름 충돌 방지)
-        String uuid = UUID.randomUUID().toString();
-        String storeFilename = uuid + "_" + originalFilename;
-
-        // 저장할 전체 경로 생성
-        Path savePath = Paths.get(uploadDir + storeFilename);
-        log.info("Save Path: " + savePath);
-
-        try {
-            // 지정된 경로에 파일 저장
-            multipartFile.transferTo(savePath);
-        } catch (IOException e) {
-            log.error("File upload failed.", e);
-            // 예외 처리 (예: 커스텀 예외 발생)
-            throw new RuntimeException("파일 업로드에 실패했습니다.", e);
-        }
-
-        // 저장된 파일의 이름(경로로 사용될 부분)을 반환
-        return storeFilename;
-    } // <<<<<<<<<<<< upload 메서드가 여기서 완전히 끝납니다.
-
-    @Override // <<<<<<<<<<<< delete 메서드는 upload 메서드 밖에서 새로 시작됩니다.
-    public void delete(String filename) {
-        if (filename == null || filename.isEmpty()) {
-            return;
-        }
-        // 전체 파일 경로 생성
-        File file = new File(uploadDir + filename);
-        log.info("Deleting file: " + file.getAbsolutePath());
-
-        // 파일이 존재하면 삭제
-        if (file.exists()) {
-            if (file.delete()) {
-                log.info("File deleted successfully: " + filename);
-            } else {
-                log.warn("Failed to delete file: " + filename);
-            }
-        } else {
-            log.warn("File not found, cannot delete: " + filename);
-        }
-    }
-}
-
-///===================================================
-
-#SearchService.java
-package com.busanit501.findmyfet.search_post;
-
-import com.busanit501.findmyfet.search_post.CategoryDto;
-
-import java.util.List;
-
-public interface SearchService {
-
-    /**
-     * 프론트엔드 검색 필터에 사용될 동물 카테고리 및 품종 목록을 반환합니다.
-     */
-    List<CategoryDto> getCategoryList();
-
-    /**
-     * 프론트엔드 검색 필터에 사용될 지역 목록을 반환합니다.
-     */
-    List<String> getRegionList();
-
-}
-
-///===================================================
-
-#SearchServiceImpl.java
-package com.busanit501.findmyfet.search_post;
-
-import com.busanit501.findmyfet.search_post.CategoryDto;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
-
-@Service
-public class SearchServiceImpl implements SearchService {
-
-    @Override
-    public List<CategoryDto> getCategoryList() {
-        // 기획서 기반 하드코딩
-        // 추후 이 데이터를 DB에서 관리하도록 확장할 수 있습니다.
-        CategoryDto dogCategory = new CategoryDto("개", List.of("말티즈", "푸들", "골든리트리버", "진돗개"));
-        CategoryDto catCategory = new CategoryDto("고양이", List.of("코리안숏헤어", "페르시안", "러시안블루", "샴"));
-
-        return List.of(dogCategory, catCategory);
-    }
-
-    @Override
-    public List<String> getRegionList() {
-        // 기획서 기반 하드코딩
-        // Post의 location 필드에 입력될 값들과 일치해야
-        return List.of(
-                "서울시", "부산시", "대구시", "인천시", "광주시",
-                "대전시", "울산시", "경기도", "강원도"
-                // 필요에 따라 다른 지역 추가
-        );
-    }
-}
-
-///===================================================
-
--dto
-
-#PostCreateRequestDto.java
-package com.busanit501.findmyfet.dto.post;
-
-import com.busanit501.findmyfet.domain.post.Post;
-import com.busanit501.findmyfet.domain.post.PostType;
-import com.busanit501.findmyfet.domain.post.Status;
-import jakarta.validation.constraints.NotBlank;
-import lombok.Getter;
-import lombok.Setter;
-
-import java.time.LocalDateTime;
-// 게시글 작성 DTO
-@Getter
-@Setter
-public class PostCreateRequestDto {
-
-    @NotBlank(message = "제목은 필수 입력 항목입니다.")
-    private String title;
-
-    @NotBlank(message = "내용은 필수 입력 항목입니다.")
-    private String content;
-
-    private String animalName;
-    private int animalAge;
-    private String animalCategory;
-    private String animalBreed;
-    private LocalDateTime lostTime;
-
-    private double latitude;
-    private double longitude;
-
-    private String location; // 잃어버린장소 추가 250825
-    private PostType postType;
-
-    // DTO를 Entity로 변환하는 메서드
-    public Post toEntity() {
-        return Post.builder()
-                .title(title)
-                .content(content)
-                .animalName(animalName)
-                .animalAge(animalAge)
-                .animalCategory(animalCategory)
-                .animalBreed(animalBreed)
-                .lostTime(lostTime)
-
-                .latitude(latitude)
-                .longitude(longitude)
-
-                .location(location) // <<<<<<<<<<<< 추가 250825
-
-                .postType(postType)
-                .status(Status.ACTIVE) // 게시글 작성 시 기본 상태는 ACTIVE
-                .build();
-    }
-}
-
-///===================================================
-
-#PostDetailResponseDto.java
-package com.busanit501.findmyfet.dto.post;
-
-import com.busanit501.findmyfet.domain.post.Post;
-import com.busanit501.findmyfet.dto.user.AuthorDto;
-import lombok.Getter;
-
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.stream.Collectors;
-
-// 상세 조회 DTO
-@Getter
-public class PostDetailResponseDto {
-
-    private Long postId;
-    private String title;
-    private String content;
-    private String animalName;
-    private int animalAge;
-    private String animalCategory;
-    private String animalBreed;
-    private LocalDateTime lostTime;
-
-    private double latitude;
-    private double longitude;
-
-    private String location; // 잃어버린장소 추가 250825
-
-    private String postType;
-    private String status;
-    private LocalDateTime createdAt;
-    private AuthorDto author; // TODO: User 기능 연동 후 추가
-    private List<String> imageUrls; // 이미지 URL 목록
-
-    public PostDetailResponseDto(Post entity) {
-        this.postId = entity.getId();
-        this.title = entity.getTitle();
-        this.content = entity.getContent();
-        this.animalName = entity.getAnimalName();
-        this.animalAge = entity.getAnimalAge();
-        this.animalCategory = entity.getAnimalCategory();
-        this.animalBreed = entity.getAnimalBreed();
-        this.lostTime = entity.getLostTime();
-
-        this.latitude = entity.getLatitude();
-        this.longitude = entity.getLongitude();
-
-        this.location = entity.getLocation(); // 잃어버린장소 추가 250825
-
-        this.postType = entity.getPostType().name();
-        this.status = entity.getStatus().name();
-        this.createdAt = entity.getCreatedAt();
-        this.imageUrls = entity.getImages().stream()
-                .map(image -> image.getImageUrl())
-                .collect(Collectors.toList());
-        if (entity.getUser() != null) { // getMember() -> getUser()
-            this.author = new AuthorDto(entity.getUser()); // getMember() -> getUser()
-        }
-    }
-}
-
-
-///===================================================
-
-#PostListResponseDto.java
-package com.busanit501.findmyfet.dto.post;
-
-import com.busanit501.findmyfet.domain.post.Post;
-import com.busanit501.findmyfet.dto.user.AuthorDto;
-import lombok.Getter;
-
-@Getter
-public class PostListResponseDto {
-    private Long postId;
-    private String title;
-    private String animalName;
-    private String thumbnailUrl; // 디폴트값 null;
-    private String postType;
-    private String status;
-
-    private AuthorDto author; // AuthorDto 필드 추가
-
-    // 엔티티를 DTO로 변환하는 생성자
-    public PostListResponseDto(Post entity) {
-        this.postId = entity.getId();
-        this.title = entity.getTitle();
-        this.animalName = entity.getAnimalName();
-        this.postType = entity.getPostType().name();
-        this.status = entity.getStatus().name();
-//        this.createdAt = entity.getCreatedAt();
-        if (entity.getUser() != null) {
-            this.author = new AuthorDto(entity.getUser());
-        }
-        // 게시글에 이미지가 존재하면, 첫 번째 이미지의 URL을 thumbnailUrl로 설정합니다.
-        // 이미지가 없으면 기존처럼 null로 유지
-        if (entity.getImages() != null && !entity.getImages().isEmpty()) {
-            this.thumbnailUrl = entity.getImages().get(0).getImageUrl();
-        }
-    }
-}
-
-///===================================================
-
-#PostUpdateRequestDto.java
-package com.busanit501.findmyfet.dto.post;
-
-import com.busanit501.findmyfet.domain.post.PostType;
-import lombok.Getter;
-import lombok.Setter;
-
-import java.time.LocalDateTime;
-import java.util.List;
-
-@Getter
-@Setter
-public class PostUpdateRequestDto {
-    private String title;
-    private String content;
-    private String animalName;
-    private int animalAge;
-    private String animalCategory;
-    private String animalBreed;
-    private LocalDateTime lostTime;
-
-    private double latitude;
-    private double longitude;
-
-    private String location; // <<<<<<<<<<<< 추가 250825
-
-    private PostType postType;
-
-    // 추가: 수정 시 삭제할 기존 이미지의 ID 목록
-    private List<Long> deletedImageIds;
-        // 기존 이미지 중 x 버튼을 눌러 삭제한 이미지"들의 ID를 보내주는 방식으로 구현
-}
-
-
-
-///===================================================
-
-#MyPostResponseDto.java
-package com.busanit501.findmyfet.dto.post;
-
-import com.busanit501.findmyfet.domain.post.Post;
-import com.busanit501.findmyfet.domain.post.PostType;
-import com.busanit501.findmyfet.domain.post.Status;
-
-import java.time.LocalDateTime;
-
-public class MyPostResponseDto {
-    private Long postId;
-    private String title;
-    private PostType postType;
-    private Status status;
-    private LocalDateTime createdAt;
-    // private int commentCount; // TODO: Comment 기능 연동 후 주석 해제
-
-    public MyPostResponseDto(Post entity) {
-        this.postId = entity.getId();
-        this.title = entity.getTitle();
-        this.postType = entity.getPostType();
-        this.status = entity.getStatus();
-        this.createdAt = entity.getCreatedAt();
-        // this.commentCount = entity.getComments().size();
-    }
-
-}
-
-///===================================================
-
--search
-#CategoryDto.java
-package com.busanit501.findmyfet.search_post;
-
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-
-import java.util.List;
-
-//동물 Category(개, 고양이)와 하위 Breed(품종) 목록을 담는역할
-@Getter
-@NoArgsConstructor
-@AllArgsConstructor
-public class CategoryDto {
-    private String category;
-    private List<String> breeds;
-
-}
-
-
-///===================================================
-
--controller
-#PostController.java
-package com.busanit501.findmyfet.controller.post;
-
-import com.busanit501.findmyfet.dto.paging.PageRequestDto;
-import com.busanit501.findmyfet.dto.paging.PageResponseDto;
-import com.busanit501.findmyfet.dto.post.*; // DTO 한번에 import
-import com.busanit501.findmyfet.service.post.PostService;
-import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-// import org.springframework.security.core.annotation.AuthenticationPrincipal; // Spring Security 설정 후 import
-// import com.busanit501.findmyfet.security.UserDetailsImpl; // UserDetails 구현체 import
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
-
-import java.util.List;
-
-@RestController
-@RequiredArgsConstructor
-@RequestMapping("/api/posts")
-public class PostController {
-
-    private final PostService postService;
-
-    // 1 게시글 목록 조회(페이징처리 + 검색기능)
-    @GetMapping
-    public ResponseEntity<PageResponseDto<PostListResponseDto>> getPostList(PageRequestDto pageRequestDTO) {
-        PageResponseDto<PostListResponseDto> response = postService.findAllPosts(pageRequestDTO);
-        return ResponseEntity.ok(response);
-    }
-
-
-    // 2 게시글 상세 조회
-    @GetMapping("/{postId}")
-    public ResponseEntity<PostDetailResponseDto> getPost(@PathVariable Long postId) {
-        PostDetailResponseDto responseDto = postService.findPostById(postId);
-        return ResponseEntity.ok(responseDto);
-    }
-
-    // 3 게시글 작성
-    @PostMapping(consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
-    public ResponseEntity<String> createPost(
-            @Valid @RequestPart("requestDto") PostCreateRequestDto requestDto,
-            @RequestPart(value = "images", required = false) List<MultipartFile> images) {
-        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
-        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
-        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
-
-        Long postId = postService.createPost(requestDto, images, tempUserId);
-        return ResponseEntity.status(HttpStatus.CREATED).body("게시글이 성공적으로 등록되었습니다. ID: " + postId);
-    }
-
-    // 4 게시글 수정
-    @PutMapping(value = "/{postId}", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
-    public ResponseEntity<String> updatePost(
-            @PathVariable Long postId,
-            @RequestPart("requestDto") PostUpdateRequestDto requestDto,
-            @RequestPart(value = "newImages", required = false) List<MultipartFile> newImages) {
-        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
-        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
-        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
-
-        postService.updatePost(postId, requestDto, newImages, tempUserId);
-        return ResponseEntity.ok("게시글이 성공적으로 수정되었습니다. ID: " + postId);
-    }
-
-    // 5 게시글 삭제
-    @DeleteMapping("/{postId}")
-    public ResponseEntity<String> deletePost(@PathVariable Long postId) {
-        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
-        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
-        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
-
-        postService.deletePost(postId, tempUserId);
-        return ResponseEntity.ok("게시글이 성공적으로 삭제되었습니다. ID: " + postId);
-    }
-
-    // 6 찾기 완료 처리
-    @PutMapping("/{postId}/complete")
-    public ResponseEntity<String> completePost(@PathVariable Long postId) {
-        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
-        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
-        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
-
-        postService.completePost(postId, tempUserId);
-        return ResponseEntity.ok("찾기 완료 처리되었습니다. ID: " + postId);
-    }
-
-    // 7 내가 작성한 게시글 목록
-    @GetMapping("/my")
-    public ResponseEntity<List<MyPostResponseDto>> getMyPosts() {
-        // @AuthenticationPrincipal UserDetailsImpl userDetails) { // TODO: Security 연동 후 주석 해제
-        // Long userId = userDetails.getUser().getUserid(); // TODO: Security 연동 후 이 코드로 교체
-        Long tempUserId = 1L; // <<<<<<<<<<<<<<<<<<<< 임시 사용자 ID (테스트용) 연동완료시 삭제해도 무방
-
-        List<MyPostResponseDto> myPosts = postService.findMyPosts(tempUserId);
-        return ResponseEntity.ok(myPosts);
-    }
-}
-
-///===================================================
--search
-#SearchController.java
-package com.busanit501.findmyfet.search_post;
-
-import com.busanit501.findmyfet.search_post.CategoryDto;
-import com.busanit501.findmyfet.search_post.SearchService;
-import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
-
-@RestController
-@RequiredArgsConstructor
-@RequestMapping("/api")
-public class SearchController {
-
-    private final SearchService searchService;
-
-
-    @GetMapping("/categories")
-    public ResponseEntity<List<CategoryDto>> getCategoryList() {
-        List<CategoryDto> categories = searchService.getCategoryList();
-        return ResponseEntity.ok(categories);
-    }
-
-
-    @GetMapping("/regions")
-    public ResponseEntity<List<String>> getRegionList() {
-        List<String> regions = searchService.getRegionList();
-        return ResponseEntity.ok(regions);
-    }
-
-}
-
-///===================================================
--error
-
--src/main/java/com/busanit501/findmyfet/dto/error/ErrorResponse.java
-package com.busanit501.findmyfet.dto.error;
-
-import lombok.Getter;
-
-// 역할: 기획서에 명시된 {"success": false, "error": {"code": "...", "message": "..."}} 와 유사한 구조를 만들기 위한 데이터
-@Getter
-public class ErrorResponse {
-    private final String code;
-    private final String message;
-
-    public ErrorResponse(String code, String message) {
-        this.code = code;
-        this.message = message;
-    }
-}
-
-///===================================================
-src/main/java/com/busanit501/findmyfet/dto/error/ErrorDetail.java
-package com.busanit501.findmyfet.dto.error;
-
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-
-@Getter
-@AllArgsConstructor
-public class ErrorDetail {
-    private String field;
-    private String message;
-}
-
-///===================================================
-src/main/java/com/busanit501/findmyfet/dto/error/ErrorResponseWithDetails.java
-package com.busanit501.findmyfet.dto.error;
-
-import lombok.Getter;
-import java.util.List;
-
-// 역할: 기존 ErrorResponse를 상속받아, 상세 에러 목록(details)을 추가로 가짐
-@Getter
-public class ErrorResponseWithDetails extends ErrorResponse {
-    private final List<ErrorDetail> details;
-
-    public ErrorResponseWithDetails(String code, String message, List<ErrorDetail> details) {
-        super(code, message);
-        this.details = details;
-    }
-}
-
-///===================================================
+//====================================
+-exception
 src/main/java/com/busanit501/findmyfet/exception/GlobalExceptionHandler.java
+#GlobalExceptionHandler.java
 package com.busanit501.findmyfet.exception;
 import com.busanit501.findmyfet.dto.error.ErrorDetail;
 import com.busanit501.findmyfet.dto.error.ErrorResponse;
@@ -1482,99 +1618,55 @@ public class GlobalExceptionHandler {
 }
 
 
-///===================================================
+//====================================
+#FindMyFetApplication
+package com.busanit501.findmyfet;
 
-///===================================================
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
+@EntityScan("com.busanit501.findmyfet.domain")
+@EnableJpaAuditing // JPA Auditing 기능 사용 어노테이션
+@SpringBootApplication
+public class FindMyFetApplication {
 
--> 이상 Post관련.
-
--entity(User)
-#User.java
-package com.busanit501.findmyfet.domain;
-
-
-import jakarta.persistence.*;
-import lombok.*;
-
-import java.util.HashSet;
-
-@Entity
-@Builder
-@Getter
-@AllArgsConstructor
-@NoArgsConstructor
-@ToString(exclude = "roleSet")
-public class User extends BaseEntity { // 베이스 엔티티 상속
-    @Id // primary key
-    @GeneratedValue(strategy = GenerationType.IDENTITY) // 키 자동생성
-    private Long userid;
-
-    @Column(unique = true, nullable = false)
-    private String loginid;
-
-    @Column(nullable = false)
-    private String password;
-
-    @Column(nullable = false)
-    private String name;
-
-    @Column(nullable = false)
-    private String phone_number;
-
-    @Column(nullable = false , unique = true)
-    private String email;
-
-    @Column(nullable = false)
-    private String address;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private Role role;
-
-
-}
-
-///===================================================
-
-#Role.java
-package com.busanit501.findmyfet.domain;
-
-public enum Role {
-    User, Admin
-}
-
-///===================================================
-
--repository(User)
-
-#UserRepository.java
-package com.busanit501.findmyfet.repository.user;
-
-import com.busanit501.findmyfet.domain.User;
-import org.springframework.data.jpa.repository.JpaRepository;
-
-public interface UserRepository extends JpaRepository<User, Long> {
-}
-
-///===================================================
-
--dto(User)
-#AuthorDto.java
-package com.busanit501.findmyfet.dto.user;
-
-import com.busanit501.findmyfet.domain.User;
-import lombok.Getter;
-
-@Getter
-public class AuthorDto {
-    private Long userId;
-    private String name;
-
-    public AuthorDto(User user) {
-        this.userId = user.getUserid();
-        this.name = user.getName();
+    public static void main(String[] args) {
+        SpringApplication.run(FindMyFetApplication.class, args);
     }
-}
 
-///
+}
+//====================================
+#application.properties
+spring.application.name=FindMyFet
+
+# MariaDB Configuration
+spring.datasource.url=jdbc:mariadb://localhost:3306/webdb
+spring.datasource.username=webuser
+spring.datasource.password=webuser
+spring.datasource.driver-class-name=org.mariadb.jdbc.Driver
+
+# Hibernate settings for MariaDB
+#spring.jpa.database-platform=org.hibernate.dialect.MariaDBDialect
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.properties.hibernate.format_sql=true
+spring.jpa.show-sql=true
+
+#logging
+logging.level.org.springframework=info
+logging.level.com.busanit501=debug
+logging.level.org.springframework.security=debug
+
+
+# File upload path
+# ??? ? ???? ?? upload ??? ?? ??? ?????.
+upload.path=${user.home}/upload
+
+# JWT Secret Key
+jwt.secret=FindMyFetProjectSecretKeyForJWTGenerationAndValidationPurposeOnlyPleaseKeepThisSecure
+
+file.upload-dir=C:/uploads/
+//====================================
+
+. 여기까지가 내가 작성한 Post관련 클래스파일들이야.
