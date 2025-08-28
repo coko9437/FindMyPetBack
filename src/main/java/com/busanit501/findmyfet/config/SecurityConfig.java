@@ -4,6 +4,7 @@ import com.busanit501.findmyfet.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -57,9 +58,23 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource())) // CORS 설정 적용
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/auth/**").permitAll() // Added /api/auth/** here
-                                                .requestMatchers("/api/posts/**").permitAll() // /api/posts 로 시작하는 모든 요청은 인증 없이 허용
+
+                                // GET 요청은 인증 없이 대부분 허용
+                                .requestMatchers(HttpMethod.GET, "/api/posts/**", "/api/comments/**").permitAll()
+
+                                .requestMatchers("/api/auth/**").permitAll() // GET 요청은 누구나 허용
+
+                                // 인증이 필요한 요청들 (데이터 변경)
+                                .requestMatchers("/api/posts/**", "/api/comments/**").authenticated()
+
+                                // 기타: 내 정보 조회 등 인증이 필요한 경로
+                                .requestMatchers("/api/users/me", "/api/posts/my").authenticated()
+
+                                // 관리자 전용 경로
+                                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+
                         .requestMatchers("/api/find-pets/**").permitAll() // Add this line
+
                         .anyRequest().authenticated() // 나머지 모든 요청은 인증 필요
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

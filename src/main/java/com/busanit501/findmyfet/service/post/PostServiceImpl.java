@@ -81,11 +81,7 @@ public class PostServiceImpl implements PostService {
         Post post = modelMapper.map(requestDto, Post.class);
 
         post.setUser(user); // 연관관계 설정
-            // post.setStatus(Status.ACTIVE); // Post 엔티티에 @Builder.Default가 없으면 이 코드가 필요할 수 있습니다.
-            // PostCreateRequestDto.toEntity() 에서는 status를 ACTIVE로 설정했었음.
-            // modelMapper는 status 필드가 DTO에 없으므로 null로 설정할 수 있으니 주의.
-            // Post 엔티티의 status 필드 선언부에 @Builder.Default와 함께 초기값을 주면 이 문제는 해결됩니다.
-            // @Builder.Default private Status status = Status.ACTIVE;
+
         Post savedPost = postRepository.save(post);
 
         log.info("Saved Post: {}, Author: {}", savedPost.getId(), user.getName());
@@ -94,6 +90,7 @@ public class PostServiceImpl implements PostService {
             for (MultipartFile imageFile : images) {
                 // 2-1. 실제 파일 업로드 로직 호출
                 String storedFilename = fileUploadService.upload(imageFile);
+
                 log.info("Uploaded Image: {}", storedFilename);
 
                 if (storedFilename != null) {
