@@ -32,26 +32,24 @@ repositories {
 }
 
 dependencies {
+
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     compileOnly 'org.projectlombok:lombok'
+    // Spring Boot DevTools (development only)
     developmentOnly 'org.springframework.boot:spring-boot-devtools'
-    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
+    // MariaDB JDBC Driver
+    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client:3.3.3'
     annotationProcessor 'org.projectlombok:lombok'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    // 추가
-    //추가
-    testCompileOnly 'org.projectlombok:lombok'
+    compileOnly 'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
 
     implementation 'org.modelmapper:modelmapper:3.1.0'
-
-    //교체
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.3'
-    // https://mvnrepository.com/artifact/com.google.code.gson/gson
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.11'
     implementation 'com.google.code.gson:gson:2.11.0'
 
     // https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-api
@@ -60,6 +58,14 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
 // https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-jackson
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
+//추가 무진
+    // H2 Database (test only)
+    testRuntimeOnly 'com.h2database:h2'
+
+    // Testcontainers for integration testing (optional)
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:mariadb'
+//추가 무진
 
     //3, 순서2 Querydsl 이용해서, 동적 sql 다루고, 빌드 패턴이용하고, 자바의 컴파일러 문법 체크 도움도 받기.
     implementation "com.querydsl:querydsl-jpa:${queryDslVersion}:jakarta"
@@ -70,7 +76,14 @@ dependencies {
             "jakarta.annotation:jakarta.annotation-api",
             "com.querydsl:querydsl-apt:${queryDslVersion}:jakarta"
     )
+
+
+
+    // 추가_250825
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
 }
+
 
 tasks.named('test') {
     useJUnitPlatform()

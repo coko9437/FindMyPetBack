@@ -1,4 +1,3 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
 
 # 유기/실종동물 지도 커뮤니티 서비스 설계 문서 (Refined)
 

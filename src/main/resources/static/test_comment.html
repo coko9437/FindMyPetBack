@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>댓글 기능 테스트 (Day 1~3)</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 0 20px; line-height: 1.6; }
+        h1, h2 { color: #333; }
+        #app { display: flex; gap: 20px; flex-direction: column; }
+        .comment-form-section, .comment-list-section { border: 1px solid #ddd; padding: 15px; border-radius: 8px; }
+        .comment-form { display: flex; flex-direction: column; gap: 10px; }
+        .comment-list { list-style: none; padding: 0; }
+        .comment-item { border-bottom: 1px solid #eee; padding: 10px 0; display: flex; flex-direction: column; gap: 5px; }
+        .comment-meta { font-size: 0.9em; color: #777; }
+        .comment-actions button { margin-left: 5px; cursor: pointer; }
+        textarea, input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { padding: 8px 12px; background-color: #007BFF; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <h1>댓글 기능 테스트</h1>
+    <p>백엔드 API(`localhost:8080` 기준)와 연결하여 댓글 CRUD를 테스트합니다.</p>
+
+    <div class="test-config">
+        <h3>테스트 설정</h3>
+        <div>
+            <label for="postIdInput">테스트할 게시글 ID (postId):</label>
+            <input type="text" id="postIdInput" value="1" placeholder="게시글 ID">
+        </div>
+        <div>
+            <label for="userIdInput">테스트할 사용자 ID (userId):</label>
+            <input type="text" id="userIdInput" value="1" placeholder="사용자 ID">
+        </div>
+        <button onclick="loadComments()">댓글 목록 불러오기</button>
+    </div>
+
+    <hr>
+
+    <div class="comment-form-section">
+        <h2>댓글 작성</h2>
+        <form class="comment-form" id="commentForm">
+            <input type="text" id="commentContent" placeholder="댓글 내용..." required>
+            <button type="submit" id="submitBtn">댓글 작성</button>
+        </form>
+        <p id="formStatus"></p>
+    </div>
+
+    <hr>
+
+    <div class="comment-list-section">
+        <h2>댓글 목록</h2>
+        <ul class="comment-list" id="commentList">
+            <p>댓글 목록을 불러와 주세요.</p>
+        </ul>
+    </div>
+</div>
+
+<script>
+    // API 기본 URL 설정 (백엔드 서버 주소)
+    const API_BASE_URL = 'http://localhost:8080/api/comment';
+
+    // DOM 요소 가져오기
+    const postIdInput = document.getElementById('postIdInput');
+    const userIdInput = document.getElementById('userIdInput');
+    const commentForm = document.getElementById('commentForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const formStatus = document.getElementById('formStatus');
+    const commentList = document.getElementById('commentList');
+
+    // 게시글의 완료 상태를 확인하는 함수 (DAY 3 로직)
+    // 실제로는 게시글 상세 API를 호출하여 상태를 확인해야 합니다.
+    // 여기서는 임시로 'completed' 상태인 게시글 ID를 설정합니다.
+    const getPostStatus = async (postId) => {
+        // TODO: 팀원 2가 만든 게시글 상세 API를 호출하여 실제 상태를 받아와야 합니다.
+        // 예: const response = await fetch(`http://localhost:8080/api/post/${postId}`);
+        // 예: const postData = await response.json();
+        // 예: return postData.completed;
+
+        // 임시 테스트용: 게시글 ID가 200이면 '완료'된 것으로 가정합니다.
+        return postId === 200;
+    };
+
+    // 댓글 목록을 불러오는 함수 (DAY 1)
+    const loadComments = async () => {
+        const postId = postIdInput.value;
+        const isCompleted = await getPostStatus(parseInt(postId));
+
+        // DAY 3 로직: 완료된 게시글은 댓글 작성을 비활성화
+        if (isCompleted) {
+            submitBtn.disabled = true;
+            formStatus.textContent = '※ 이 게시글은 찾기 완료되어 댓글을 작성할 수 없습니다.';
+            formStatus.style.color = 'red';
+        } else {
+            submitBtn.disabled = false;
+            formStatus.textContent = '';
+        }
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/list/${postId}`);
+            if (!response.ok) {
+                throw new Error('댓글 목록을 불러오지 못했습니다.');
+            }
+            const comments = await response.json();
+            renderComments(comments);
+        } catch (error) {
+            console.error('Error:', error);
+            commentList.innerHTML = `<p>${error.message || '오류가 발생했습니다.'}</p>`;
+        }
+    };
+
+    // 댓글 목록을 HTML로 렌더링하는 함수
+    const renderComments = (comments) => {
+        commentList.innerHTML = '';
+        if (comments.length === 0) {
+            commentList.innerHTML = '<p>댓글이 없습니다.</p>';
+            return;
+        }
+        comments.forEach(comment => {
+            const li = document.createElement('li');
+            li.className = 'comment-item';
+            li.dataset.commentId = comment.commentId;
+            li.innerHTML = `
+                    <p>${comment.content}</p>
+                    <div class="comment-meta">
+                        작성자: ${comment.userId} | 작성일: ${new Date(comment.createdAt).toLocaleString()}
+                        <div class="comment-actions">
+                            <button onclick="editComment(${comment.commentId})">수정</button>
+                            <button onclick="deleteComment(${comment.commentId})">삭제</button>
+                        </div>
+                    </div>
+                `;
+            commentList.appendChild(li);
+        });
+    };
+
+    // 댓글 작성 (DAY 2)
+    commentForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const postId = postIdInput.value;
+        const userId = userIdInput.value;
+        const content = document.getElementById('commentContent').value;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/${postId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ postId, userId, content, imageUrl: null })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`댓글 작성 실패: ${errorText}`);
+            }
+            document.getElementById('commentContent').value = '';
+            loadComments(); // 작성 후 목록 새로고침
+        } catch (error) {
+            console.error('Error:', error);
+            alert(error.message);
+        }
+    });
+
+    // 댓글 삭제 (DAY 2)
+    const deleteComment = async (commentId) => {
+        if (!confirm('정말 삭제하시겠습니까?')) return;
+        try {
+            const response = await fetch(`${API_BASE_URL}/${commentId}`, {
+                method: 'DELETE',
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`댓글 삭제 실패: ${errorText}`);
+            }
+            loadComments(); // 삭제 후 목록 새로고침
+        } catch (error) {
+            console.error('Error:', error);
+            alert(error.message);
+        }
+    };
+
+    // 댓글 수정 (DAY 2)
+    const editComment = async (commentId) => {
+        const newContent = prompt('수정할 내용을 입력하세요:');
+        if (!newContent) return;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/${commentId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: newContent })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`댓글 수정 실패: ${errorText}`);
+            }
+            loadComments(); // 수정 후 목록 새로고침
+        } catch (error) {
+            console.error('Error:', error);
+            alert(error.message);
+        }
+    };
+
+    // 초기 로드 시 댓글 불러오기
+    window.onload = () => {
+        loadComments();
+    };
+</script>
+</body>
+</html>

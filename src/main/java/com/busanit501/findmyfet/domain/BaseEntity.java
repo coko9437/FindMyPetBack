@@ -14,13 +14,13 @@ import java.time.LocalDateTime;
 @MappedSuperclass
 @EntityListeners(value = {AuditingEntityListener.class})
 @Getter
-abstract class BaseEntity {
+public abstract class BaseEntity {
 
     @CreatedDate
     @Column(name = "reg_date", updatable = false)
-    private LocalDateTime regDate;
+    private LocalDateTime createdAt;
 
     @LastModifiedDate
     @Column(name = "mod_date")
-    private LocalDateTime modDate;
+    private LocalDateTime updatedAt;
 }
